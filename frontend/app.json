@@ -4,38 +4,20 @@
     "slug": "digital-book-reader",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0f172a"
-    },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.digitalbook.reader"
     },
     "android": {
       "package": "com.digitalbook.reader",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0f172a"
-      },
       "permissions": [
         "INTERNET"
       ]
     },
     "plugins": [
-      "expo-screen-capture",
-      "expo-secure-store"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "your-eas-project-id-here"
-      }
-    }
+      "expo-secure-store",
+      "expo-status-bar"
+    ]
   }
 }

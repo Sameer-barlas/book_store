@@ -17,11 +17,45 @@ import {
   ScrollView,
   RefreshControl
 } from 'react-native';
-import * as ScreenCapture from 'expo-screen-capture';
-import * as SecureStore from 'expo-secure-store';
 
-// Replace with your deployed Vercel backend URL or local IP address for physical device testing
-const DEFAULT_API_URL = 'https://your-vercel-deployment.vercel.app';
+let ScreenCapture = null;
+let SecureStore = null;
+
+try {
+  ScreenCapture = require('expo-screen-capture');
+} catch (err) {
+  console.warn('[App] expo-screen-capture unavailable in this environment:', err.message);
+}
+
+try {
+  SecureStore = require('expo-secure-store');
+} catch (err) {
+  console.warn('[App] expo-secure-store unavailable in this environment:', err.message);
+}
+
+const secureStore = {
+  async getItemAsync(key) {
+    if (!SecureStore || typeof SecureStore.getItemAsync !== 'function') {
+      return null;
+    }
+    return SecureStore.getItemAsync(key);
+  },
+  async setItemAsync(key, value) {
+    if (!SecureStore || typeof SecureStore.setItemAsync !== 'function') {
+      return null;
+    }
+    return SecureStore.setItemAsync(key, value);
+  },
+  async deleteItemAsync(key) {
+    if (!SecureStore || typeof SecureStore.deleteItemAsync !== 'function') {
+      return null;
+    }
+    return SecureStore.deleteItemAsync(key);
+  }
+};
+
+// Local backend running on the PC for Expo testing. Use your PC LAN IP for physical Android device testing.
+const DEFAULT_API_URL = "http://10.0.2.2:5000";
 const TOKEN_KEY = 'user_auth_token';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -39,6 +73,13 @@ export default function App() {
 
     async function activateSecurityGuard() {
       try {
+        if (!ScreenCapture || typeof ScreenCapture.preventScreenCaptureAsync !== 'function') {
+          if (isSubscribed) {
+            console.log('[Security] Screen capture protection unavailable in this environment.');
+          }
+          return;
+        }
+
         // Blocks screenshot captures and screen recording on Android (FLAG_SECURE)
         await ScreenCapture.preventScreenCaptureAsync();
         if (isSubscribed) {
@@ -60,8 +101,8 @@ export default function App() {
   useEffect(() => {
     async function restoreSession() {
       try {
-        const storedToken = await SecureStore.getItemAsync(TOKEN_KEY);
-        const storedUrl = await SecureStore.getItemAsync('api_base_url');
+        const storedToken = await secureStore.getItemAsync(TOKEN_KEY);
+        const storedUrl = await secureStore.getItemAsync('api_base_url');
         if (storedUrl) {
           setApiUrl(storedUrl);
         }
@@ -81,9 +122,9 @@ export default function App() {
   // Login handler
   const handleLoginSuccess = async (newToken, configuredUrl) => {
     try {
-      await SecureStore.setItemAsync(TOKEN_KEY, newToken);
+      await secureStore.setItemAsync(TOKEN_KEY, newToken);
       if (configuredUrl) {
-        await SecureStore.setItemAsync('api_base_url', configuredUrl);
+        await secureStore.setItemAsync('api_base_url', configuredUrl);
         setApiUrl(configuredUrl);
       }
       setToken(newToken);
@@ -95,7 +136,7 @@ export default function App() {
   // Logout handler
   const handleLogout = async () => {
     try {
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await secureStore.deleteItemAsync(TOKEN_KEY);
       setToken(null);
     } catch (err) {
       console.error('[Auth] Logout storage cleanup failed:', err);
@@ -158,7 +199,8 @@ function LoginScreen({ apiUrl, onLoginSuccess }) {
     setIsSubmitting(true);
 
     try {
-      const endpoint = `${customUrl.replace(/\/+$/, '')}/api/login`;
+      const baseUrl = customUrl.replace(/\/api\/?$/, '').replace(/\/+$/, '');
+      const endpoint = `${baseUrl}/api/login`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
