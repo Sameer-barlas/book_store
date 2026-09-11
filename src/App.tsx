@@ -1,267 +1,343 @@
-import React, { useState, useEffect } from 'react';
-import {
-  BookOpen,
-  Shield,
-  Smartphone,
-  Server,
-  Code,
-  Copy,
-  Check,
-  Lock,
-  Unlock,
-  LogOut,
-  RefreshCw,
-  Play,
-  Terminal,
-  ExternalLink,
-  Folder,
-  FileCode,
-  ChevronRight,
-  AlertCircle,
-  Eye,
-  CheckCircle2,
-  XCircle,
-  Database,
-  Layers,
-  ArrowRight
-} from 'lucide-react';
-import { PROJECT_FILES, ProjectFile } from './data/projectFiles';
+import React, { useEffect, useState } from 'react';
 
-// Sample book pages corresponding to backend/api/index.js
-const BOOK_PAGES_DATA = [
-  {
-    pageNumber: 1,
-    title: "Cover & Title Page",
-    imageUrl: "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=1200&q=85",
-  },
-  {
-    pageNumber: 2,
-    title: "Prologue: The Foundations",
-    imageUrl: "https://images.unsplash.com/photo-1512820790803-83ca734da794?auto=format&fit=crop&w=1200&q=85",
-  },
-  {
-    pageNumber: 3,
-    title: "Chapter 1: The Architecture of Thought",
-    imageUrl: "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=1200&q=85",
-  },
-  {
-    pageNumber: 4,
-    title: "Chapter 2: Principles of Modern Craft",
-    imageUrl: "https://images.unsplash.com/photo-1457369804613-52c61a468e7d?auto=format&fit=crop&w=1200&q=85",
-  },
-  {
-    pageNumber: 5,
-    title: "Chapter 3: The Digital Library",
-    imageUrl: "https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=1200&q=85",
-  },
-  {
-    pageNumber: 6,
-    title: "Epilogue & Acknowledgments",
-    imageUrl: "https://images.unsplash.com/photo-1476275466078-4007374efbbe?auto=format&fit=crop&w=1200&q=85",
-  }
-];
+type Book = {
+  _id: string;
+  title: string;
+  slug?: string;
+  pageCount?: number;
+  description?: string;
+};
+
+type PageItem = {
+  _id: string;
+  pageNumber: number;
+  imageUrl: string;
+  title?: string;
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'code' | 'simulator' | 'api' | 'guide'>('code');
-  const [selectedFile, setSelectedFile] = useState<ProjectFile>(PROJECT_FILES[0]);
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [adminEmail, setAdminEmail] = useState('hafiz@gmail.com');
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('admin_token'));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [books, setBooks] = useState<Book[]>([]);
+  const [selectedBookId, setSelectedBookId] = useState('');
+  const [pages, setPages] = useState<PageItem[]>([]);
+  const [bookTitle, setBookTitle] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [pageNumber, setPageNumber] = useState('');
+  const [insertPosition, setInsertPosition] = useState('append');
+  const [pageTitle, setPageTitle] = useState('');
 
-  // Mobile Simulator States
-  const [simToken, setSimToken] = useState<string | null>(null);
-  const [simEmail, setSimEmail] = useState<string>('subscriber@digitalpublishing.com');
-  const [simLoading, setSimLoading] = useState<boolean>(false);
-  const [simError, setSimError] = useState<string | null>(null);
-  const [screenCaptureBlocked, setScreenCaptureBlocked] = useState<boolean>(true);
-  const [attemptedScreenshot, setAttemptedScreenshot] = useState<boolean>(false);
-
-  // API Playground States
-  const [apiEmail, setApiEmail] = useState<string>('subscriber@digitalpublishing.com');
-  const [apiToken, setApiToken] = useState<string>('');
-  const [apiResponse, setApiResponse] = useState<any>(null);
-  const [apiLoading, setApiLoading] = useState<boolean>(false);
-
-  const handleCopyCode = (content: string, path: string) => {
-    navigator.clipboard.writeText(content);
-    setCopiedPath(path);
-    setTimeout(() => setCopiedPath(null), 2000);
-  };
-
-  // Simulate API Login
-  const executeSimLogin = (emailToTest: string) => {
-    setSimLoading(true);
-    setSimError(null);
-
-    setTimeout(() => {
-      const email = emailToTest.trim().toLowerCase();
-      if (email === 'subscriber@digitalpublishing.com' || email === 'reader@example.com') {
-        const mockJwt = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${btoa(
-          JSON.stringify({
-            userId: 'usr_664e10b7f842',
-            email: email,
-            hasAccess: true,
-            exp: Math.floor(Date.now() / 1000) + 7 * 86400
-          })
-        )}.simulated_sig_${Math.random().toString(36).substring(7)}`;
-        setSimToken(mockJwt);
-        setApiToken(mockJwt);
-        setSimLoading(false);
-      } else if (email === 'revoked@expired.com') {
-        setSimError('Access denied: Subscriber entitlement expired or revoked.');
-        setSimLoading(false);
-      } else {
-        setSimError('Access denied: Subscriber email not registered in system.');
-        setSimLoading(false);
+  const loadBooks = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/api/admin/books', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Unable to load books.');
+      setBooks(data.books || []);
+      if ((data.books || []).length > 0 && !selectedBookId) {
+        setSelectedBookId(data.books[0]._id);
       }
-    }, 450);
+    } catch (err: any) {
+      setError(err.message || 'Could not load books.');
+    }
   };
 
-  const handleSimLogout = () => {
-    setSimToken(null);
-    setSimError(null);
+  const loadPages = async (bookId: string) => {
+    if (!token || !bookId) return;
+    try {
+      const response = await fetch(`/api/admin/books/${bookId}/pages`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Unable to load pages.');
+      setPages(data.pages || []);
+      setBookTitle(data.book?.title || 'Book');
+    } catch (err: any) {
+      setError(err.message || 'Could not load pages.');
+    }
   };
 
-  const triggerScreenshotTest = () => {
-    setAttemptedScreenshot(true);
-    setTimeout(() => setAttemptedScreenshot(false), 3000);
+  useEffect(() => {
+    if (token) {
+      loadBooks();
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (selectedBookId) {
+      loadPages(selectedBookId);
+    }
+  }, [selectedBookId]);
+
+  const handleLogin = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: adminEmail })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Admin login failed.');
+
+      localStorage.setItem('admin_token', data.token);
+      setToken(data.token);
+    } catch (err: any) {
+      setError(err.message || 'Login failed.');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('admin_token');
+    setToken(null);
+    setBooks([]);
+    setPages([]);
+    setSelectedBookId('');
+    setError('');
+  };
+
+  const handleUpload = async () => {
+    if (!token || !selectedBookId || !uploadFile) {
+      setError('Choose a book and upload an image first.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const imageData = reader.result;
+
+        const response = await fetch(`/api/admin/books/${selectedBookId}/pages`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            imageData,
+            pageNumber: pageNumber ? Number(pageNumber) : undefined,
+            insertPosition,
+            title: pageTitle || undefined
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.error || 'Page upload failed.');
+
+        setUploadFile(null);
+        setPageNumber('');
+        setPageTitle('');
+        setInsertPosition('append');
+        if (selectedBookId) loadPages(selectedBookId);
+        if (token) loadBooks();
+      };
+      reader.readAsDataURL(uploadFile);
+    } catch (err: any) {
+      setError(err.message || 'Upload failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-2xl">
+          <div className="mb-6">
+            <p className="text-xs uppercase tracking-[0.2em] text-sky-400">Admin access</p>
+            <h1 className="mt-3 text-3xl font-bold">Book Admin Panel</h1>
+          </div>
+
+          <label className="mb-2 block text-sm text-slate-300">Admin email</label>
+          <input
+            value={adminEmail}
+            onChange={(e) => setAdminEmail(e.target.value)}
+            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none ring-0"
+            placeholder="hafiz@gmail.com"
+          />
+
+          <button
+            onClick={handleLogin}
+            disabled={loading}
+            className="mt-5 w-full rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white hover:bg-sky-500 disabled:opacity-60"
+          >
+            {loading ? 'Signing in...' : 'Login as admin'}
+          </button>
+
+          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">
+            Default admin email: <span className="font-semibold text-sky-300">hafiz@gmail.com</span>
+          </div>
+
+          {error && <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500 selection:text-white">
-      {/* Top Navigation Bar */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-4 lg:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-sky-600/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
-              <BookOpen className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-semibold text-white tracking-tight">
-                  Digital Book Publishing Platform
-                </h1>
-                <span className="text-[11px] font-medium uppercase px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/60">
-                  Production Ready
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                Express Serverless API (Vercel) + Expo React Native Reader (Android APK)
-              </p>
-            </div>
+    <div className="min-h-screen bg-slate-950 text-white">
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-sky-400">Admin panel</p>
+            <h1 className="text-xl font-bold">Digital Book Manager</h1>
           </div>
-
-          {/* Navigation Tabs */}
-          <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60">
-            <button
-              id="tab-code-btn"
-              onClick={() => setActiveTab('code')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'code'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Code className="w-4 h-4" />
-              <span>Source Files (9)</span>
-            </button>
-
-            <button
-              id="tab-simulator-btn"
-              onClick={() => setActiveTab('simulator')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'simulator'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Smartphone className="w-4 h-4" />
-              <span>App Simulator</span>
-            </button>
-
-            <button
-              id="tab-api-btn"
-              onClick={() => setActiveTab('api')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'api'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Server className="w-4 h-4" />
-              <span>API Playground</span>
-            </button>
-
-            <button
-              id="tab-guide-btn"
-              onClick={() => setActiveTab('guide')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'guide'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Terminal className="w-4 h-4" />
-              <span>Build & Deploy</span>
-            </button>
-          </div>
+          <button
+            onClick={handleLogout}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
+          >
+            Logout
+          </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8">
-        {/* TAB 1: SOURCE FILES EXPLORER */}
-        {activeTab === 'code' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* File Tree Sidebar */}
-            <div className="lg:col-span-4 space-y-4">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-                  <div className="flex items-center gap-2">
-                    <Folder className="w-4 h-4 text-sky-400" />
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      Project Structure
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-slate-500 font-mono">9 generated files</span>
-                </div>
+      <main className="mx-auto grid max-w-7xl gap-6 px-6 py-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Books</h2>
+            <span className="rounded-full bg-sky-500/10 px-2 py-1 text-xs text-sky-300">{books.length}</span>
+          </div>
 
-                {/* Backend Folder */}
-                <div className="space-y-1 mb-4">
-                  <div className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-amber-400">
-                    <Server className="w-3.5 h-3.5" />
-                    <span>backend/ (Express on Vercel)</span>
-                  </div>
-                  <div className="pl-4 space-y-0.5 border-l border-slate-800 ml-3">
-                    {PROJECT_FILES.filter((f) => f.folder === 'backend').map((file) => (
-                      <button
-                        key={file.path}
-                        onClick={() => setSelectedFile(file)}
-                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
-                          selectedFile.path === file.path
-                            ? 'bg-sky-500/20 text-sky-300 font-medium border border-sky-500/30'
-                            : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 truncate">
-                          <FileCode className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                          <span className="truncate font-mono">{file.path.replace('backend/', '')}</span>
-                        </div>
-                        {selectedFile.path === file.path && (
-                          <ChevronRight className="w-3 h-3 text-sky-400 shrink-0" />
-                        )}
-                      </button>
-                    ))}
+          <div className="space-y-3">
+            {books.map((book) => (
+              <button
+                key={book._id}
+                onClick={() => setSelectedBookId(book._id)}
+                className={`w-full rounded-xl border p-3 text-left transition ${
+                  selectedBookId === book._id
+                    ? 'border-sky-500 bg-sky-500/10'
+                    : 'border-slate-700 bg-slate-950 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium text-white">{book.title}</p>
+                  <span className="text-xs text-slate-400">{book.pageCount || 0} pages</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">{book.slug || 'book-1'}</p>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <section className="space-y-6">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Selected book</p>
+                <h2 className="text-2xl font-bold">{bookTitle || 'Book manager'}</h2>
+              </div>
+              <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
+                {pages.length} pages
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">Page number</label>
+                <input
+                  value={pageNumber}
+                  onChange={(e) => setPageNumber(e.target.value)}
+                  placeholder="e.g. 5"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">Insert position</label>
+                <select
+                  value={insertPosition}
+                  onChange={(e) => setInsertPosition(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
+                >
+                  <option value="append">Append at end</option>
+                  <option value="before">Insert before this page</option>
+                  <option value="after">Insert after this page</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm text-slate-300">Page title</label>
+                <input
+                  value={pageTitle}
+                  onChange={(e) => setPageTitle(e.target.value)}
+                  placeholder="Page title"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm text-slate-300">Upload page image</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                  className="block w-full rounded-xl border border-dashed border-slate-700 bg-slate-950 p-3 text-sm text-slate-300"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <div className="text-sm text-slate-400">{uploadFile ? `Selected: ${uploadFile.name}` : 'No image selected yet'}</div>
+              <button
+                onClick={handleUpload}
+                disabled={loading || !uploadFile}
+                className="rounded-xl bg-sky-600 px-5 py-3 font-semibold text-white hover:bg-sky-500 disabled:opacity-60"
+              >
+                {loading ? 'Uploading...' : 'Upload page'}
+              </button>
+            </div>
+
+            {error && <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <h3 className="mb-4 text-lg font-semibold">Pages in this book</h3>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {pages.length === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950 p-6 text-sm text-slate-400 md:col-span-2 xl:col-span-3">
+                  No pages uploaded yet for this book.
+                </div>
+              )}
+
+              {pages.map((page) => (
+                <div key={page._id} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
+                  <img src={page.imageUrl} alt={page.title || `Page ${page.pageNumber}`} className="h-52 w-full object-cover" />
+                  <div className="flex items-center justify-between gap-2 p-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Page {page.pageNumber}</p>
+                      <p className="text-sm font-medium text-white">{page.title || `Page ${page.pageNumber}`}</p>
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
 
-                {/* Frontend Folder */}
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-sky-400">
-                    <Smartphone className="w-3.5 h-3.5" />
-                    <span>frontend/ (Expo React Native APK)</span>
-                  </div>
-                  <div className="pl-4 space-y-0.5 border-l border-slate-800 ml-3">
-                    {PROJECT_FILES.filter((f) => f.folder === 'frontend').map((file) => (
-                      <button
                         key={file.path}
                         onClick={() => setSelectedFile(file)}
                         className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
@@ -537,14 +613,13 @@ export default function App() {
                   {simToken ? (
                     /* READER SCREEN */
                     <div className="flex-1 flex flex-col bg-slate-950 overflow-hidden">
-                      {/* Reader Header */}
                       <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between z-10">
                         <div>
                           <h3 className="text-xs font-bold text-slate-100 truncate max-w-[170px]">
-                            Principles of Architecture
+                            {livePages.length > 0 ? 'Book 1' : 'Loading book...'}
                           </h3>
                           <span className="text-[10px] font-semibold text-sky-400 uppercase tracking-wider">
-                            DRM Protected • 6 Pages
+                            {livePages.length > 0 ? `${livePages.length} Pages` : 'Fetching pages'}
                           </span>
                         </div>
                         <button
@@ -556,36 +631,43 @@ export default function App() {
                         </button>
                       </div>
 
-                      {/* Vertical FlatList Pages */}
                       <div className="flex-1 overflow-y-auto p-3 space-y-4">
-                        {BOOK_PAGES_DATA.map((page) => (
-                          <div
-                            key={page.pageNumber}
-                            className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-md"
-                          >
-                            <div className="px-3 py-2 bg-slate-800/90 border-b border-slate-700/80 flex items-center justify-between text-[11px]">
-                              <span className="font-bold text-sky-400">PAGE {page.pageNumber}</span>
-                              <span className="text-slate-400 truncate max-w-[170px]">
-                                {page.title}
-                              </span>
+                        {livePages.length > 0 ? (
+                          livePages.map((page) => (
+                            <div
+                              key={page.pageNumber}
+                              className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-md"
+                            >
+                              <div className="px-3 py-2 bg-slate-800/90 border-b border-slate-700/80 flex items-center justify-between text-[11px]">
+                                <span className="font-bold text-sky-400">PAGE {page.pageNumber}</span>
+                                <span className="text-slate-400 truncate max-w-[170px]">
+                                  {page.title || `Page ${page.pageNumber}`}
+                                </span>
+                              </div>
+                              <div className="relative aspect-[3/4] bg-slate-950">
+                                <img
+                                  src={page.imageUrl}
+                                  alt={page.title || `Page ${page.pageNumber}`}
+                                  className="w-full h-full object-cover"
+                                  loading="lazy"
+                                />
+                              </div>
+                              <div className="px-3 py-1.5 bg-slate-800/60 flex items-center justify-center text-[10px] text-slate-500 font-mono">
+                                Page {page.pageNumber} of {livePages.length}
+                              </div>
                             </div>
-                            <div className="relative aspect-[3/4] bg-slate-950">
-                              <img
-                                src={page.imageUrl}
-                                alt={page.title}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                              />
-                            </div>
-                            <div className="px-3 py-1.5 bg-slate-800/60 flex items-center justify-center text-[10px] text-slate-500 font-mono">
-                              Page {page.pageNumber} of {BOOK_PAGES_DATA.length}
-                            </div>
+                          ))
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                            Waiting for live backend page data...
                           </div>
-                        ))}
+                        )}
 
-                        <div className="py-6 text-center text-xs text-slate-500">
-                          End of authorized manuscript preview
-                        </div>
+                        {livePages.length > 0 && (
+                          <div className="py-6 text-center text-xs text-slate-500">
+                            End of authorized manuscript preview
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -797,9 +879,9 @@ export default function App() {
                           setApiResponse({
                             status: 200,
                             data: {
-                              bookTitle: "Principles of Digital Architecture",
-                              totalPages: BOOK_PAGES_DATA.length,
-                              pages: BOOK_PAGES_DATA
+                              bookTitle: 'Book 1',
+                              totalPages: 0,
+                              pages: []
                             }
                           });
                         }

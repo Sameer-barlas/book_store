@@ -11,6 +11,7 @@
   "dependencies": {
     "@expo/metro-runtime": "~57.0.15",
     "expo": "^57.0.21",
+    "expo-image-picker": "~57.0.16",
     "expo-screen-capture": "~57.0.2",
     "expo-secure-store": "~57.0.3",
     "expo-status-bar": "~57.0.1",

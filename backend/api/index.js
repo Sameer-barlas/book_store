@@ -3,6 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const User = require('../models/User');
 const Admin = require('../models/Admin');
@@ -22,6 +23,13 @@ cloudinary.config({
 
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 12 * 1024 * 1024
+  }
+});
 
 let cachedDb = global.mongoose;
 if (!cachedDb) {
@@ -59,15 +67,21 @@ async function connectToDatabase() {
 
 async function ensureDefaultAdmin() {
   await connectToDatabase();
-  let admin = await Admin.findOne({ email: ADMIN_EMAIL }).lean();
-  if (!admin) {
-    admin = await Admin.create({
+  const admin = await Admin.findOneAndUpdate(
+    { email: ADMIN_EMAIL },
+    {
       email: ADMIN_EMAIL,
       name: 'Hafiz Admin',
       role: 'admin',
       isActive: true
-    });
-  }
+    },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true
+    }
+  ).lean();
+
   return admin;
 }
 
@@ -120,11 +134,34 @@ async function getBookRecord(bookIdentifier) {
   return Book.findOne({ slug: bookIdentifier }).lean();
 }
 
-async function ensureBookPageEntriesForBook(bookKey) {
-  const pages = await BookPage.find({ bookId: bookKey }).sort({ pageNumber: 1, _id: 1 }).lean();
-  const total = pages.length;
-  await Book.findOneAndUpdate({ slug: bookKey }, { pageCount: total }, { upsert: true, new: true });
-  return pages;
+function buildBookPageQuery(bookKey, bookId) {
+  const candidates = [bookKey, String(bookId || ''), 'book-1', 'book1']
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index);
+
+  return {
+    $or: [
+      { bookId: { $in: candidates } },
+      { bookId: { $exists: false } },
+      { bookId: null }
+    ]
+  };
+}
+
+async function syncBookPageCount(book) {
+  if (!book) return book;
+
+  const bookKey = book.slug || String(book._id);
+  const query = buildBookPageQuery(bookKey, book._id);
+  const totalPages = await BookPage.countDocuments(query);
+
+  const updatedBook = await Book.findByIdAndUpdate(
+    book._id,
+    { pageCount: totalPages },
+    { new: true }
+  ).lean();
+
+  return updatedBook || { ...book, pageCount: totalPages };
 }
 
 app.get('/api/health', (req, res) => {
@@ -151,12 +188,21 @@ app.post('/api/login', async (req, res) => {
     try {
       await connectToDatabase();
       user = await User.findOne({ email: normalizedEmail }).lean();
+
+      if (!user && normalizedEmail === ADMIN_EMAIL) {
+        const adminRecord = await Admin.findOne({ email: ADMIN_EMAIL, isActive: true }).lean();
+        if (adminRecord) {
+          user = { _id: adminRecord._id, email: adminRecord.email, hasAccess: true };
+        }
+      }
     } catch (dbError) {
       console.warn('MongoDB unavailable for login; using demo fallback auth.', dbError.message);
       if (DEMO_ALLOWED_EMAILS.has(normalizedEmail)) {
         user = { email: normalizedEmail, hasAccess: true };
       } else if (DEMO_REVOKED_EMAILS.has(normalizedEmail)) {
         user = { email: normalizedEmail, hasAccess: false };
+      } else if (normalizedEmail === ADMIN_EMAIL) {
+        user = { email: normalizedEmail, hasAccess: true };
       }
     }
 
@@ -260,8 +306,20 @@ app.post('/api/admin/login', async (req, res) => {
 
     await ensureDefaultAdmin();
 
-    await connectToDatabase();
-    const admin = await Admin.findOne({ email: normalizedEmail, isActive: true }).lean();
+    let admin = await Admin.findOne({ email: normalizedEmail, isActive: true }).lean();
+
+    if (!admin) {
+      admin = await Admin.findOneAndUpdate(
+        { email: normalizedEmail },
+        {
+          email: normalizedEmail,
+          name: normalizedEmail.split('@')[0],
+          role: 'admin',
+          isActive: true
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).lean();
+    }
 
     if (!admin || normalizedEmail !== ADMIN_EMAIL) {
       return res.status(401).json({ error: 'Access denied. Only hafiz@gmail.com can access the admin panel.' });
@@ -302,7 +360,8 @@ app.get('/api/admin/books', withAdminAuth, async (req, res) => {
       books = [defaultBook];
     }
 
-    return res.status(200).json({ books });
+    const syncedBooks = await Promise.all(books.map(syncBookPageCount));
+    return res.status(200).json({ books: syncedBooks });
   } catch (error) {
     console.error('List books error:', error);
     return res.status(500).json({ error: 'Unable to load books.' });
@@ -317,42 +376,139 @@ app.get('/api/admin/books/:bookId/pages', withAdminAuth, async (req, res) => {
     }
 
     const bookKey = book.slug || String(book._id);
-    const pages = await BookPage.find({
-      $or: [
-        { bookId: bookKey },
-        { bookId: String(book._id) },
-        { bookId: 'book1' },
-        { bookId: 'book-1' }
-      ]
-    })
+    let pages = await BookPage.find(buildBookPageQuery(bookKey, book._id))
       .sort({ pageNumber: 1, _id: 1 })
       .lean();
 
-    return res.status(200).json({ book, pages });
+    if (!pages.length) {
+      pages = await BookPage.find({}).sort({ pageNumber: 1, _id: 1 }).lean();
+    }
+
+    const syncedBook = await syncBookPageCount(book);
+    return res.status(200).json({ book: syncedBook, pages });
   } catch (error) {
     console.error('List book pages error:', error);
     return res.status(500).json({ error: 'Unable to load pages for this book.' });
   }
 });
 
-app.post('/api/admin/books/:bookId/pages', withAdminAuth, async (req, res) => {
+app.delete('/api/admin/books/:bookId/pages/:pageId', withAdminAuth, async (req, res) => {
+  try {
+    const { bookId, pageId } = req.params;
+    const book = await getBookRecord(bookId);
+    if (!book) {
+      return res.status(404).json({ error: 'Book not found.' });
+    }
+
+    const page = await BookPage.findOne({
+      _id: pageId,
+      $or: [
+        { bookId: book.slug || String(book._id) },
+        { bookId: String(book._id) },
+        { bookId: 'book1' },
+        { bookId: 'book-1' },
+        { bookId: { $exists: false } },
+        { bookId: null }
+      ]
+    });
+
+    if (!page) {
+      return res.status(404).json({ error: 'Page not found for this book.' });
+    }
+
+    await BookPage.deleteOne({ _id: pageId });
+
+    const remainingPages = await BookPage.find(buildBookPageQuery(book.slug || String(book._id), book._id))
+      .sort({ pageNumber: 1, _id: 1 })
+      .lean();
+
+    for (let index = 0; index < remainingPages.length; index += 1) {
+      await BookPage.findByIdAndUpdate(remainingPages[index]._id, { pageNumber: index + 1 });
+    }
+
+    const syncedBook = await syncBookPageCount(book);
+    return res.status(200).json({
+      message: 'Page deleted successfully.',
+      book: syncedBook,
+      pages: remainingPages.map((item, index) => ({ ...item, pageNumber: index + 1 }))
+    });
+  } catch (error) {
+    console.error('Delete page error:', error);
+    return res.status(500).json({ error: 'Unable to delete the page.' });
+  }
+});
+
+app.post('/api/admin/books/:bookId/pages', upload.single('image'), withAdminAuth, async (req, res) => {
   try {
     const { bookId } = req.params;
     const { imageData, imageUrl, pageNumber, insertPosition = 'append', title } = req.body;
+    const fileBuffer = req.file && req.file.buffer ? req.file.buffer : null;
 
-    if (!imageData && !imageUrl) {
+    if (!fileBuffer && !imageData && !imageUrl) {
       return res.status(400).json({ error: 'Please upload an image or provide a Cloudinary URL.' });
     }
+
+    const cloudinaryConfigured = !!(
+      process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+    );
 
     let uploadedUrl = imageUrl;
     const hasCloudinaryImageData = typeof imageData === 'string' && imageData.startsWith('data:image');
 
-    if (hasCloudinaryImageData) {
-      const uploadResult = await cloudinary.uploader.upload(imageData, {
-        folder: 'digital-book-pages',
-        resource_type: 'image'
-      });
-      uploadedUrl = uploadResult.secure_url;
+    if (fileBuffer) {
+      if (!cloudinaryConfigured) {
+        return res.status(500).json({
+          error: 'Cloudinary credentials are missing. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET to backend/.env.'
+        });
+      }
+
+      try {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            {
+              folder: 'digital-book-pages',
+              resource_type: 'image',
+              transformation: [{ quality: 'auto', fetch_format: 'auto' }]
+            },
+            (error, result) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve(result);
+            }
+          );
+          stream.end(fileBuffer);
+        });
+        uploadedUrl = uploadResult.secure_url;
+      } catch (cloudinaryError) {
+        console.error('Cloudinary upload failed:', cloudinaryError);
+        return res.status(500).json({
+          error: `Cloudinary upload failed: ${cloudinaryError?.message || 'Unknown upload error'}`
+        });
+      }
+    } else if (hasCloudinaryImageData) {
+      if (!cloudinaryConfigured) {
+        return res.status(500).json({
+          error: 'Cloudinary credentials are missing. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET to backend/.env.'
+        });
+      }
+
+      try {
+        const uploadResult = await cloudinary.uploader.upload(imageData, {
+          folder: 'digital-book-pages',
+          resource_type: 'image',
+          transformation: [{ quality: 'auto', fetch_format: 'auto' }]
+        });
+        uploadedUrl = uploadResult.secure_url;
+      } catch (cloudinaryError) {
+        console.error('Cloudinary upload failed:', cloudinaryError);
+        return res.status(500).json({
+          error: `Cloudinary upload failed: ${cloudinaryError?.message || 'Unknown upload error'}`
+        });
+      }
     }
 
     if (!uploadedUrl) {
@@ -365,7 +521,9 @@ app.post('/api/admin/books/:bookId/pages', withAdminAuth, async (req, res) => {
     }
 
     const bookKey = book.slug || 'book-1';
-    const pages = await BookPage.find({ bookId: bookKey }).sort({ pageNumber: 1, _id: 1 }).lean();
+    const pages = await BookPage.find(buildBookPageQuery(bookKey, book._id))
+      .sort({ pageNumber: 1, _id: 1 })
+      .lean();
 
     const targetPageNumber = Number(pageNumber) || pages.length + 1;
     let newPageNumber = targetPageNumber;
@@ -396,11 +554,13 @@ app.post('/api/admin/books/:bookId/pages', withAdminAuth, async (req, res) => {
       isActive: true
     });
 
-    const updatedCount = await BookPage.countDocuments({ bookId: bookKey });
-    await Book.findOneAndUpdate({ slug: bookKey }, { pageCount: updatedCount }, { new: true });
+    const updatedCount = await BookPage.countDocuments(buildBookPageQuery(bookKey, book._id));
+    const syncedBook = await Book.findOneAndUpdate({ slug: bookKey }, { pageCount: updatedCount }, { new: true }).lean();
 
     return res.status(201).json({
       message: 'Page uploaded and saved.',
+      pageCount: updatedCount,
+      book: syncedBook,
       page: {
         _id: pageDoc._id,
         bookId: pageDoc.bookId,
@@ -417,9 +577,18 @@ app.post('/api/admin/books/:bookId/pages', withAdminAuth, async (req, res) => {
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`Digital Book Publisher API running locally on http://localhost:${PORT}`);
-  });
+  ensureDefaultAdmin()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Digital Book Publisher API running locally on http://localhost:${PORT}`);
+      });
+    })
+    .catch((startupError) => {
+      console.error('Admin initialization failed on startup:', startupError);
+      app.listen(PORT, () => {
+        console.log(`Digital Book Publisher API running locally on http://localhost:${PORT}`);
+      });
+    });
 }
 
 module.exports = app;
