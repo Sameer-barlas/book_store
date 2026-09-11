@@ -1,9 +1,11 @@
 const http = require('http');
 const body = JSON.stringify({ email: 'subscriber@digitalpublishing.com' });
+const host = process.env.API_HOST || 'localhost';
+const port = Number(process.env.PORT) || 5000;
 
 const req = http.request({
-  host: 'localhost',
-  port: 5000,
+  host,
+  port,
   path: '/api/login',
   method: 'POST',
   headers: {

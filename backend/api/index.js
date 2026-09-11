@@ -21,7 +21,27 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-app.use(cors());
+const defaultAllowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+const allowedOrigins = Array.from(new Set([
+  process.env.FRONTEND_URL,
+  process.env.CORS_ORIGIN,
+  process.env.CLIENT_URL,
+  ...defaultAllowedOrigins
+].filter(Boolean)));
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`CORS blocked for origin: ${origin}`), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json({ limit: '20mb' }));
 
 const upload = multer({
@@ -163,6 +183,16 @@ async function syncBookPageCount(book) {
 
   return updatedBook || { ...book, pageCount: totalPages };
 }
+
+app.get('/health', (req, res) => {
+  const readyState = cachedDb.conn && cachedDb.conn.connection ? cachedDb.conn.connection.readyState : mongoose.connection.readyState;
+
+  res.status(200).json({
+    status: 'ok',
+    service: 'Digital Book Publishing API',
+    database: readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
 
 app.get('/api/health', (req, res) => {
   const readyState = cachedDb.conn && cachedDb.conn.connection ? cachedDb.conn.connection.readyState : mongoose.connection.readyState;
@@ -575,23 +605,20 @@ app.post('/api/admin/books/:bookId/pages', upload.single('image'), withAdminAuth
   }
 });
 
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  const PORT = process.env.PORT || 5000;
-  ensureDefaultAdmin()
-    .then(() => {
-      app.listen(PORT, () => {
-        console.log(`Digital Book Publisher API running locally on http://localhost:${PORT}`);
-      });
-    })
-    .catch((startupError) => {
-      console.error('Admin initialization failed on startup:', startupError);
-      app.listen(PORT, () => {
-        console.log(`Digital Book Publisher API running locally on http://localhost:${PORT}`);
-      });
-    });
-}
+const PORT = Number(process.env.PORT) || 5000;
+const startup = () => {
+  app.listen(PORT, '0.0.0.0', () => {
+    const mode = process.env.NODE_ENV === 'production' ? 'production' : 'local';
+    console.log(`Digital Book Publisher API running in ${mode} mode on http://0.0.0.0:${PORT}`);
+  });
+};
+
+ensureDefaultAdmin()
+  .then(() => startup())
+  .catch((startupError) => {
+    console.error('Admin initialization failed on startup:', startupError);
+    startup();
+  });
 
 module.exports = app;
 
-// Export for Vercel Serverless Function runtime
-module.exports = app;
